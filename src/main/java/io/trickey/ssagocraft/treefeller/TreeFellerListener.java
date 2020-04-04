@@ -1,87 +1,183 @@
-package io.trickey.ssagocraft;
+package io.trickey.ssagocraft.treefeller;
 
+import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Material;
-import org.bukkit.World;
+import org.bukkit.Sound;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.inventory.meta.Damageable;
+import org.bukkit.inventory.meta.ItemMeta;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
-public class TreeFeller implements Listener {
+public class TreeFellerListener implements Listener {
 
-    private static final HashSet<Material> LOG_MATERIALS = (HashSet<Material>) Collections.unmodifiableSet(new HashSet<>(Arrays.asList(Material.ACACIA_LOG, Material.BIRCH_LOG, Material.DARK_OAK_LOG, Material.BIRCH_LOG, Material.JUNGLE_LOG, Material.OAK_LOG, Material.SPRUCE_LOG)));
-    private static final HashSet<Material> LEAF_MATERIALS = (HashSet<Material>) Collections.unmodifiableSet(new HashSet<>(Arrays.asList(Material.ACACIA_LEAVES, Material.BIRCH_LEAVES, Material.DARK_OAK_LEAVES, Material.BIRCH_LEAVES, Material.JUNGLE_LEAVES, Material.OAK_LEAVES, Material.SPRUCE_LEAVES)));
+    private static final Map<Material, Material> LOG_LEAF_MATCHES;
 
-    private final JavaPlugin plugin;
+    private static final Set<BlockFace> SEARCH_DIRECTIONS_XZ;
 
-    public TreeFeller(JavaPlugin plugin) {
-        this.plugin = plugin;
+    static {
+        Map<Material, Material> workingMap = new HashMap<>();
+        workingMap.put(Material.ACACIA_LOG, Material.ACACIA_LEAVES);
+        workingMap.put(Material.BIRCH_LOG, Material.BIRCH_LEAVES);
+        workingMap.put(Material.DARK_OAK_LOG, Material.DARK_OAK_LEAVES);
+        workingMap.put(Material.JUNGLE_LOG, Material.JUNGLE_LEAVES);
+        workingMap.put(Material.OAK_LOG, Material.OAK_LEAVES);
+        workingMap.put(Material.SPRUCE_LOG, Material.SPRUCE_LEAVES);
+        LOG_LEAF_MATCHES = Collections.unmodifiableMap(workingMap);
+
+        Set<BlockFace> workingSet = new HashSet<>();
+        workingSet.add(BlockFace.NORTH);
+        workingSet.add(BlockFace.EAST);
+        workingSet.add(BlockFace.SOUTH);
+        workingSet.add(BlockFace.WEST);
+        workingSet.add(BlockFace.NORTH_EAST);
+        workingSet.add(BlockFace.SOUTH_EAST);
+        workingSet.add(BlockFace.SOUTH_WEST);
+        workingSet.add(BlockFace.NORTH_WEST);
+        SEARCH_DIRECTIONS_XZ = Collections.unmodifiableSet(workingSet);
+    }
+
+    private final ThreadLocalRandom rand;
+
+    private Set<Material> validTools;
+    private int logLimit;
+    private boolean popLeaves;
+    private int leafSearchRadius;
+
+    public TreeFellerListener(Set<Material> validTools, int logLimit, boolean popLeaves, int leafSearchRadius) throws IllegalStateException {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("TreeFellerListener must be initialized from the main Bukkit thread as it uses ThreadLocalRandom.");
+        }
+
+        this.rand = ThreadLocalRandom.current();
+
+        this.validTools = validTools;
+        this.logLimit = logLimit;
+        this.popLeaves = popLeaves;
+        this.leafSearchRadius = leafSearchRadius;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public final void onBlockBreak(BlockBreakEvent event) {
-        Player player = event.getPlayer();
-        ItemStack handStack = player.getInventory().getItemInMainHand();
-        Material tool = handStack.getType();
-        if (tool == Material.GOLDEN_AXE) {
-            Block block = event.getBlock();
-            if (LOG_MATERIALS.contains(block.getType())) {
-                player.sendMessage("*Chop* *Chop* The power of the golden axe fells the tree.");
-                HashSet<Block> logs = new HashSet<>();
-                HashSet<Block> leaves = new HashSet<>();
-                getTree(block, logs, leaves);
-                Material type = logs.iterator().next().getType();
-                for (Block log : logs) {
-                    log.setType(Material.AIR);
+        if (event.isCancelled()) {
+            return;
+        }
+
+        Player p = event.getPlayer();
+        ItemStack heldItem = p.getInventory().getItemInMainHand();
+        ItemMeta heldMeta = heldItem.getItemMeta();
+        float itemDamageChance = (heldMeta == null || p.getGameMode() == GameMode.CREATIVE) ? 0 : calculateItemDamageChance(heldMeta);
+        int itemMaxDurability = heldItem.getType().getMaxDurability();
+        Block origin = event.getBlock();
+        Material originType = origin.getType();
+
+        List<Block> workingList = new ArrayList<>();
+
+        int foundLogs = 0;
+
+        Material leafType;
+        Block centerLog;
+        Block workingBlock;
+
+        if (!validTools.contains(heldItem.getType()) || !LOG_LEAF_MATCHES.containsKey(originType)) {
+            return;
+        }
+
+        event.setCancelled(true);
+
+        workingList.add(origin);
+        origin.breakNaturally();
+        leafType = LOG_LEAF_MATCHES.get(originType);
+
+        while (foundLogs <= logLimit && !workingList.isEmpty()) {
+            centerLog = workingList.remove(0);
+
+            if (itemDamageChance > 0 && damageTool(heldMeta, itemDamageChance, itemMaxDurability)) {
+                p.getInventory().clear(p.getInventory().getHeldItemSlot());
+                p.getWorld().playSound(p.getLocation(), Sound.ENTITY_ITEM_BREAK, 1, 1);
+                break;
+            }
+
+            foundLogs = searchLogXZ(originType, workingList, foundLogs, leafType, centerLog);
+            centerLog = centerLog.getRelative(BlockFace.UP);
+            if (centerLog.getType() == originType) {
+                workingList.add(centerLog);
+                centerLog.breakNaturally();
+                foundLogs++;
+                if (popLeaves) {
+                    popLeaves(centerLog, leafType, leafSearchRadius);
                 }
-                World world = player.getWorld();
-                world.dropItem(block.getLocation(), new ItemStack(type, logs.size()));
+            }
+            foundLogs = searchLogXZ(originType, workingList, foundLogs, leafType, centerLog);
+        }
+
+        heldItem.setItemMeta(heldMeta);
+    }
+
+    private int searchLogXZ(Material originType, List<Block> workingList, int foundLogs, Material leafType, Block centerLog) {
+        Block workingBlock;
+        for (BlockFace bf : SEARCH_DIRECTIONS_XZ) {
+            workingBlock = centerLog.getRelative(bf);
+            if (workingBlock.getType() == originType) {
+                workingList.add(workingBlock);
+                workingBlock.breakNaturally();
+                foundLogs++;
+                if (popLeaves) {
+                    popLeaves(workingBlock, leafType, leafSearchRadius);
+                }
+            }
+        }
+        return foundLogs;
+    }
+
+    private void popLeaves(Block origin, Material leafType, int searchRadius) {
+        Block workingBlock;
+
+        for (int y = -searchRadius; y < searchRadius + 1; y++) {
+            for (int x = -searchRadius; x < searchRadius + 1; x++) {
+                for (int z = -searchRadius; z < searchRadius + 1; z++) {
+                    workingBlock = origin.getRelative(x, y, z);
+                    if (workingBlock.getType() == leafType) {
+                        workingBlock.breakNaturally();
+                    }
+                }
             }
         }
     }
 
-    private void checkDirection(Block anchor, BlockFace direction, HashSet<Block> logs, HashSet<Block> leaves) {
-        // North:
-        Block nextAnchor = anchor.getRelative(direction);
-        if (LOG_MATERIALS.contains(nextAnchor.getType()) && !logs.contains(nextAnchor)) {
-            logs.add(nextAnchor);
-            getTree(nextAnchor, logs, leaves);
-        } else if (LEAF_MATERIALS.contains(nextAnchor.getType()) && !leaves.contains(nextAnchor)) {
-            leaves.add(nextAnchor);
+    private boolean damageTool(ItemMeta itemMeta, float breakChance, int itemMaxDurability) {
+        Damageable damageable = (Damageable) itemMeta;
+
+        if (breakChance == 1 || rand.nextFloat() < breakChance) {
+            damageable.setDamage(damageable.getDamage() + 1);
         }
+
+        return damageable.getDamage() == itemMaxDurability;
     }
 
-    private void checkAllDirections(Block anchor, HashSet<Block> logs, HashSet<Block> leaves) {
-        checkDirection(anchor, BlockFace.NORTH, logs, leaves);
-        checkDirection(anchor, BlockFace.NORTH_EAST, logs, leaves);
-        checkDirection(anchor, BlockFace.EAST, logs, leaves);
-        checkDirection(anchor, BlockFace.SOUTH_EAST, logs, leaves);
-        checkDirection(anchor, BlockFace.SOUTH, logs, leaves);
-        checkDirection(anchor, BlockFace.SOUTH_WEST, logs, leaves);
-        checkDirection(anchor, BlockFace.WEST, logs, leaves);
-        checkDirection(anchor, BlockFace.NORTH_WEST, logs, leaves);
-    }
+    private float calculateItemDamageChance(ItemMeta itemMeta) {
+        if (itemMeta.isUnbreakable() || !(itemMeta instanceof Damageable)) {
+            return 0;
+        }
 
+        int unbreakingLevel = itemMeta.getEnchantLevel(Enchantment.DURABILITY);
 
-    private void getTree(Block anchor, HashSet<Block> logs, HashSet<Block> leaves) {
-        // Limits:
-        if (logs.size() > 150) return;
-
-        checkAllDirections(anchor, logs, leaves);
-
-        // Shift anchor one up:
-        anchor = anchor.getRelative(BlockFace.UP);
-
-        checkAllDirections(anchor, logs, leaves);
-        checkDirection(anchor, BlockFace.SELF, logs, leaves);
+        return unbreakingLevel == 0 ? 1 : 1.0f / (1 + unbreakingLevel);
     }
 }
