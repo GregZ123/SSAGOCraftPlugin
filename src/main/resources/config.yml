@@ -1,0 +1,22 @@
+################################################################################
+###         This is the main config file for the SSAGO Core plugin           ###
+###    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~   ###
+###       This file contains all config options related to basic plugin      ###
+###       function, for message formatting options see the messages.yml      ###
+################################################################################
+
+TreeFeller:
+  # The list of items that a player may use to trigger the tree felling, if the
+  # item type is damageable it will be effected by PerBlockDamage and
+  # UseUnbreaking.
+  ValidTools:
+    - GOLDEN_AXE
+  # The maximum number of logs to process before exiting the log search, due to
+  # the log finding algorithm this limit may run over by up to nine blocks.
+  LogLimit: 250
+  Leaves:
+    # If true leaves detected as part of the chopped tree will be broken
+    # instantly.
+    Pop: true
+    # The radius around found logs to be declared as part of the tree.
+    SearchRadius: 3
