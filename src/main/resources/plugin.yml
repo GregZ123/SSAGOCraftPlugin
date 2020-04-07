@@ -1,7 +1,9 @@
-name: SSAGOCraft
-main: io.trickey.ssagocraft.SSAGOCraftPlugin
-version: 1.0-SNAPSHOT
+name: ${project.name}
+main: ${mainClass}
+description: ${project.description}
+version: ${project.version}
 api-version: 1.15
-description: Various tweaks for SSAGOCraft
 author: Dan Trickey
+authors:
+  - GregZ_
 database: false
