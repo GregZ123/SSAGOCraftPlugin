@@ -60,17 +60,23 @@ public class TreeFellerListener implements Listener {
     private boolean popLeaves;
     private int leafSearchRadius;
 
-    public TreeFellerListener(Set<Material> validTools, int logLimit, boolean popLeaves, int leafSearchRadius) throws IllegalStateException {
+    public TreeFellerListener(Set<Material> validTools, int logLimit, boolean popLeaves, int leafSearchRadius) throws IllegalStateException, IllegalArgumentException {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException("TreeFellerListener must be initialized from the main Bukkit thread as it uses ThreadLocalRandom.");
+        }
+
+        for (Material mat : validTools) {
+            if (!mat.isItem()) {
+                throw new IllegalArgumentException("Found non item material in valid tools set, material: " + mat);
+            }
         }
 
         this.rand = ThreadLocalRandom.current();
 
         this.validTools = validTools;
-        this.logLimit = logLimit;
+        this.logLimit = Math.abs(logLimit);
         this.popLeaves = popLeaves;
-        this.leafSearchRadius = leafSearchRadius;
+        this.leafSearchRadius = Math.abs(leafSearchRadius);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -93,16 +99,12 @@ public class TreeFellerListener implements Listener {
 
         Material leafType;
         Block centerLog;
-        Block workingBlock;
 
         if (!validTools.contains(heldItem.getType()) || !LOG_LEAF_MATCHES.containsKey(originType)) {
             return;
         }
 
-        event.setCancelled(true);
-
         workingList.add(origin);
-        origin.breakNaturally();
         leafType = LOG_LEAF_MATCHES.get(originType);
 
         while (foundLogs <= logLimit && !workingList.isEmpty()) {
@@ -114,24 +116,26 @@ public class TreeFellerListener implements Listener {
                 break;
             }
 
-            foundLogs = searchLogXZ(originType, workingList, foundLogs, leafType, centerLog);
+            foundLogs += searchLogXZ(originType, workingList, leafType, centerLog);
             centerLog = centerLog.getRelative(BlockFace.UP);
             if (centerLog.getType() == originType) {
                 workingList.add(centerLog);
                 centerLog.breakNaturally();
                 foundLogs++;
                 if (popLeaves) {
-                    popLeaves(centerLog, leafType, leafSearchRadius);
+                    popLeaves(centerLog, leafType);
                 }
             }
-            foundLogs = searchLogXZ(originType, workingList, foundLogs, leafType, centerLog);
+            foundLogs += searchLogXZ(originType, workingList, leafType, centerLog);
         }
 
         heldItem.setItemMeta(heldMeta);
     }
 
-    private int searchLogXZ(Material originType, List<Block> workingList, int foundLogs, Material leafType, Block centerLog) {
+    private int searchLogXZ(Material originType, List<Block> workingList, Material leafType, Block centerLog) {
         Block workingBlock;
+        int foundLogs = 0;
+
         for (BlockFace bf : SEARCH_DIRECTIONS_XZ) {
             workingBlock = centerLog.getRelative(bf);
             if (workingBlock.getType() == originType) {
@@ -139,19 +143,20 @@ public class TreeFellerListener implements Listener {
                 workingBlock.breakNaturally();
                 foundLogs++;
                 if (popLeaves) {
-                    popLeaves(workingBlock, leafType, leafSearchRadius);
+                    popLeaves(workingBlock, leafType);
                 }
             }
         }
+
         return foundLogs;
     }
 
-    private void popLeaves(Block origin, Material leafType, int searchRadius) {
+    private void popLeaves(Block origin, Material leafType) {
         Block workingBlock;
 
-        for (int y = -searchRadius; y < searchRadius + 1; y++) {
-            for (int x = -searchRadius; x < searchRadius + 1; x++) {
-                for (int z = -searchRadius; z < searchRadius + 1; z++) {
+        for (int x = -leafSearchRadius; x < leafSearchRadius + 1; x++) {
+            for (int y = -leafSearchRadius; y < leafSearchRadius + 1; y++) {
+                for (int z = -leafSearchRadius; z < leafSearchRadius + 1; z++) {
                     workingBlock = origin.getRelative(x, y, z);
                     if (workingBlock.getType() == leafType) {
                         workingBlock.breakNaturally();
@@ -161,10 +166,10 @@ public class TreeFellerListener implements Listener {
         }
     }
 
-    private boolean damageTool(ItemMeta itemMeta, float breakChance, int itemMaxDurability) {
+    private boolean damageTool(ItemMeta itemMeta, float damageChance, int itemMaxDurability) {
         Damageable damageable = (Damageable) itemMeta;
 
-        if (breakChance == 1 || rand.nextFloat() < breakChance) {
+        if (damageChance == 1 || rand.nextFloat() < damageChance) {
             damageable.setDamage(damageable.getDamage() + 1);
         }
 
